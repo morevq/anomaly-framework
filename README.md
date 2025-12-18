@@ -27,7 +27,7 @@ anomaly_fix_<kind>(
     p_dry_run boolean DEFAULT true
 ) RETURNS jsonb
 ```
-- kind: duplicates | missing | outliers
+- kind: duplicates | missing | outliers | rule-based
 - p_schema, p_table: целевая таблица
 - p_target_columns: колонки для анализа (назначение зависит от kind)
 - p_key_cols: ключ для группировки/аудита; если не задан, используется ctid или все колонки (см. ниже)
@@ -70,3 +70,15 @@ anomaly_fix_<kind>(
   - p_action: 'flag' | 'nullify' | 'replace_with_median' | 'replace_with_mean' | 'cap' | 'delete' (default 'flag')
   - p_params: те же пороги, для flag — flag_column (default "is_outlier")
   - cap ограничивает значения в пределах порогов метода iqr/zscore/mad
+
+## rule-based
+- detect:
+  - p_params.rules: массив объектов {name?, description?, severity?, expr} с SQL-условиями для поиска нарушений
+  - p_key_cols/p_target_columns: используются только для примеров ключей в аудите
+  - p_dry_run: всегда true (только аудит), фиксируется количество и примеры ctids/ключей
+- fix:
+  - p_action: глобальное действие по умолчанию 'report'; поддерживаются 'report' | 'delete' | 'set_null' | 'set_value'
+  - p_params.rules: как в detect, но с полем action (если нужно переопределить p_action) и params для действий
+    - set_null: params.target_columns (иначе p_target_columns)
+    - set_value: params.set_value {column, value}
+  - p_dry_run=true пишет только аудит; false применяет действия к строкам, выбранным по expr
