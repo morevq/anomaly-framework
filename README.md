@@ -27,7 +27,7 @@ anomaly_fix_<kind>(
     p_dry_run boolean DEFAULT true
 ) RETURNS jsonb
 ```
-- kind: duplicates | missing | outliers | rule-based
+- kind: duplicates | missing | outliers | rule-based | timeseries
 - p_schema, p_table: целевая таблица
 - p_target_columns: колонки для анализа (назначение зависит от kind)
 - p_key_cols: ключ для группировки/аудита; если не задан, используется ctid или все колонки (см. ниже)
@@ -82,3 +82,17 @@ anomaly_fix_<kind>(
     - set_null: params.target_columns (иначе p_target_columns)
     - set_value: params.set_value {column, value}
   - p_dry_run=true пишет только аудит; false применяет действия к строкам, выбранным по expr
+
+## timeseries
+- detect:
+  - p_params.time_column: обязательный параметр с названием столбца времени (временной ряд должен быть отсортирован)
+  - p_target_columns: числовые колонки для анализа; если не задано, используются все числовые столбцы
+  - p_params:
+    - time_column: string (обязательно) — название столбца времени
+    - window_size: int, default 7 — размер скользящего окна для расчета статистик
+    - z_threshold: numeric, default 3.0 — порог z-оценки для идентификации аномалий (в стандартных отклонениях от среднего)
+  - p_key_cols: разделение данных на группы для независимого анализа каждой группы; если не задано, анализируется весь датасет
+- fix:
+  - p_action: 'replace_with_rolling_mean' (единственное действие) — замена аномальных значений на скользящее среднее
+  - p_params: те же пороги window_size и z_threshold для консистентности с detect
+  - dry_run=false применяет замену значений в исходной таблице для всех выявленных аномалий
