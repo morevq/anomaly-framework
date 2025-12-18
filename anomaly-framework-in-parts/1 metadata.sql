@@ -1,6 +1,6 @@
 -- таблицы метаданных для аудита операций по поиску и фиксации аномалий
 -- dedup_audit хранит шапку запуска: время, схему, таблицу, ключи, действие, флаг сухого прогона, число обработанных групп и произвольные детали
-CREATE TABLE dedup_audit (
+CREATE TABLE IF NOT EXISTS dedup_audit (
     id serial PRIMARY KEY,            -- идентификатор записи аудита
     run_ts timestamptz DEFAULT now(), -- отметка времени запуска
     db_schema text,                   -- имя схемы целевой таблицы
@@ -13,7 +13,7 @@ CREATE TABLE dedup_audit (
 );
 
 -- dedup_audit_rows хранит детальные строки аудита: ключ группы, оставленный ctid, удаленные ctid, заметку и дополнительные поля
-CREATE TABLE dedup_audit_rows (
+CREATE TABLE IF NOT EXISTS dedup_audit_rows (
     id serial PRIMARY KEY,                               -- идентификатор записи детали
     audit_id int REFERENCES dedup_audit(id) ON DELETE CASCADE, -- связь с шапкой аудита
     group_key text,                                      -- значение ключа группы или составной ключ

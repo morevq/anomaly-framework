@@ -187,7 +187,7 @@ BEGIN
         v_col    := rec.key;
         v_method := rec.value->>'method';
 
-        SELECT format_type(a.atttypid, a.atttymod)
+        SELECT format_type(a.atttypid, a.atttypmod)
         INTO v_col_type
         FROM pg_attribute a
         JOIN pg_class c ON c.oid = a.attrelid

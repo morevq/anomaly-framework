@@ -47,7 +47,7 @@ BEGIN
     END;
 
     -- проверка колонки и ее типа
-    SELECT format_type(a.atttypid, a.atttymod)
+    SELECT format_type(a.atttypid, a.atttypmod)
     INTO col_type
     FROM pg_attribute a
     WHERE a.attrelid = rel AND a.attname = p_col AND NOT a.attisdropped;
