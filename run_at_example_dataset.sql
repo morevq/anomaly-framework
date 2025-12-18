@@ -1,0 +1,141 @@
+-- шаг 1: обнаружение пропусков с большим лимитом выборки для отчета
+SELECT public.anomaly_detect_missing(
+  p_schema         := 'public',
+  p_table          := 'power_consumption',
+  p_target_columns := ARRAY['global_active_power','global_reactive_power','voltage','global_intensity','sub_metering_1','sub_metering_2','sub_metering_3'],
+  p_key_cols       := ARRAY['id'],
+  p_params         := '{"limit_sample":1048575}'::jsonb,
+  p_dry_run        := true
+);
+
+-- шаг 2: пробный сценарий исправления пропусков без применения изменений (dry run)
+-- пояснение: вывод планируемых действий и объем затронутых строк без модификации данных
+SELECT public.anomaly_fix_missing(
+  p_schema         := 'public',
+  p_table          := 'power_consumption',
+  p_target_columns := NULL,
+  p_key_cols       := ARRAY['id'],
+  p_action         := NULL,
+  p_params         := '{
+        "actions": {
+            "global_active_power":   {"method":"delete_row"},
+            "global_reactive_power": {"method":"set_constant","value":0},
+            "voltage":               {"method":"set_mode"},
+            "global_intensity":      {"method":"set_mean"},
+            "sub_metering_1":        {"method":"set_median"},
+            "sub_metering_2":        {"method":"forward_fill", "order_by":"global_intensity"},
+            "sub_metering_3":        {"method":"backward_fill", "order_by":"voltage"}
+        }
+  }'::jsonb,
+  p_dry_run        := true
+);
+
+-- шаг 3: применение исправлений пропусков
+-- пояснение: использование разных стратегий для колонок, сухой прогон отключен, изменения вносятся
+SELECT public.anomaly_fix_missing(
+  p_schema         := 'public',
+  p_table          := 'power_consumption',
+  p_target_columns := NULL,
+  p_key_cols       := ARRAY['id'],
+  p_action         := NULL,
+  p_params         := '{
+    "actions": {
+        "global_active_power":   {"method":"delete_row"},
+        "global_reactive_power": {"method":"set_constant","value":0},
+        "voltage":               {"method":"set_mode"},
+        "global_intensity":      {"method":"set_mean"},
+        "sub_metering_1":        {"method":"set_median"},
+        "sub_metering_2":        {"method":"forward_fill","order_by":"global_intensity"},
+        "sub_metering_3":        {"method":"copy_from_other_column","source_column":"sub_metering_2"}
+    }
+  }'::jsonb,
+  p_dry_run        := false
+);
+
+-- шаг 4: обнаружение дубликатов по полному набору показателей и времени измерения
+SELECT public.anomaly_detect_duplicates(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['measurement_timestamp','global_active_power','global_reactive_power','voltage','global_intensity','sub_metering_1','sub_metering_2','sub_metering_3'],
+    p_key_cols       := NULL,
+    p_params         := '{"sample_limit":5}'::jsonb,
+    p_dry_run        := true
+);
+
+-- шаг 5: удаление дубликатов, с сохранением первой записи в каждой группе
+-- пояснение: при p_dry_run=false выполняется удаление строк, аудит сохраняет детали
+SELECT public.anomaly_fix_duplicates(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['measurement_timestamp','global_active_power','global_reactive_power','voltage','global_intensity','sub_metering_1','sub_metering_2','sub_metering_3'],
+    p_key_cols       := NULL,
+    p_action         := 'delete',
+    p_params         := '{"keep":"first"}'::jsonb,
+    p_dry_run        := false
+);
+
+-- шаг 6: обнаружение выбросов по глобальной активной мощности методом iqr
+-- пояснение: p_dry_run=true значит только логирование, без изменений
+SELECT public.anomaly_detect_outliers(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['global_active_power'],
+    p_key_cols       := ARRAY['id'],
+    p_params         := '{"method":"iqr","k":1.5}'::jsonb,
+    p_dry_run        := true
+);
+
+-- шаг 7: фиксация выбросов по напряжению методом zscore, установка флага в отдельную колонку
+-- пояснение: добавляется колонка voltage_outlier при необходимости, далее выставляется флаг
+SELECT public.anomaly_fix_outliers(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['voltage'],
+    p_key_cols       := ARRAY['id'],
+    p_action         := 'flag',
+    p_params         := '{"method":"zscore","threshold":3,"flag_column":"voltage_outlier"}'::jsonb,
+    p_dry_run        := false
+);
+
+-- шаг 8: фиксация выбросов по реактивной мощности методом mad, замена на медиану
+SELECT public.anomaly_fix_outliers(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['global_reactive_power'],
+    p_key_cols       := ARRAY['id'],
+    p_action         := 'replace_with_median',
+    p_params         := '{"method":"mad","threshold":3.5}'::jsonb,
+    p_dry_run        := false
+);
+
+-- шаг 9: фиксация выбросов по глобальной силе тока методом iqr с ограничением значений
+SELECT public.anomaly_fix_outliers(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['global_intensity'],
+    p_key_cols       := ARRAY['id'],
+    p_action         := 'cap',
+    p_params         := '{"method":"iqr","k":1.5}'::jsonb,
+    p_dry_run        := false
+);
+
+-- шаг 10: обнаружение выбросов по sub_metering_1 методом mad, только логирование
+SELECT public.anomaly_detect_outliers(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['sub_metering_1'],
+    p_key_cols       := ARRAY['id'],
+    p_params         := '{"method":"mad","threshold":3.5}'::jsonb,
+    p_dry_run        := true
+);
+
+-- шаг 11: обнаружение выбросов по sub_metering_2 методом mad, только логирование
+SELECT public.anomaly_detect_outliers(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['sub_metering_2'],
+    p_key_cols       := ARRAY['id'],
+    p_params         := '{"method":"mad","threshold":3.5}'::jsonb,
+    p_dry_run        := true
+);
+
