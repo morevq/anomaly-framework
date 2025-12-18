@@ -1147,8 +1147,11 @@ BEGIN
                 END IF;
 
                 IF v_set_list IS NOT NULL THEN
-                    v_sql := format('UPDATE %I.%I SET %s = NULL WHERE ctid = ANY($1::tid[])',
-                                    p_schema, p_table, array_to_string(v_set_list, ' = NULL, ') || ' = NULL');
+                    v_sql := format(
+                        'UPDATE %I.%I SET %s WHERE ctid = ANY($1::tid[])',
+                        p_schema, p_table,
+                        array_to_string(ARRAY(SELECT s || ' = NULL' FROM unnest(v_set_list) AS s), ', ')
+                    );
                     EXECUTE v_sql USING v_ctids;
                     v_stmt_count := v_stmt_count + v_count;
                 END IF;
