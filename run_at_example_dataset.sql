@@ -62,7 +62,7 @@ SELECT public.anomaly_detect_duplicates(
     p_dry_run        := true
 );
 
--- шаг 5: удаление дубликатов, с сохранением первой записи в каждой группе
+-- шаг 5: удаление дубликатов с сохранением первой записи в каждой группе
 -- пояснение: при p_dry_run=false выполняется удаление строк, аудит сохраняет детали
 SELECT public.anomaly_fix_duplicates(
     p_schema         := 'public',
@@ -86,7 +86,7 @@ SELECT public.anomaly_detect_outliers(
 );
 
 -- шаг 7: фиксация выбросов по напряжению методом zscore, установка флага в отдельную колонку
--- пояснение: добавляется колонка voltage_outlier при необходимости, далее выставляется флаг
+-- пояснение: добавление колонки voltage_outlier при необходимости, далее выставление флага
 SELECT public.anomaly_fix_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
@@ -139,3 +139,118 @@ SELECT public.anomaly_detect_outliers(
     p_dry_run        := true
 );
 
+-- шаг 12: обнаружение аномалий на основе правил (dry-run)
+-- пояснение: проверка строк на соответствие заданным sql-условиям, логирование нарушений без изменений
+SELECT anomaly_detect_rule_based(
+    'public',
+    'power_consumption',
+    NULL,
+    ARRAY['id'],
+    '{
+        "rules": [
+            {
+                "name": "neg_global_active_power",
+                "expr": "global_active_power < 0",
+                "severity": "high",
+                "description": "глобальная активная мощность не может быть отрицательной"
+            },
+            {
+                "name": "neg_global_reactive_power",
+                "expr": "global_reactive_power < 0",
+                "severity": "high",
+                "description": "глобальная реактивная мощность не может быть отрицательной"
+            },
+            {
+                "name": "voltage_out_of_range",
+                "expr": "voltage < 200 OR voltage > 250",
+                "severity": "medium",
+                "description": "напряжение должно быть в диапазоне 200-250 в"
+            },
+            {
+                "name": "global_intensity_too_high",
+                "expr": "global_intensity > 100",
+                "severity": "low",
+                "description": "глобальная сила тока слишком велика"
+            }
+        ]
+    }'::jsonb,
+    TRUE
+);
+
+-- шаг 13: исправление аномалий на основе правил (dry-run)
+-- пояснение: планирование действий для строк с нарушениями, вывод в аудит без модификации данных
+SELECT anomaly_fix_rule_based(
+    'public',
+    'power_consumption',
+    NULL,
+    ARRAY['id'],
+    NULL,
+    '{
+        "rules": [
+            {
+                "name": "neg_global_active_power",
+                "expr": "global_active_power < 0",
+                "action": "set_value",
+                "params": {"set_value": {"column":"global_active_power", "value":"0"}}
+            },
+            {
+                "name": "neg_global_reactive_power",
+                "expr": "global_reactive_power < 0",
+                "action": "set_value",
+                "params": {"set_value": {"column":"global_reactive_power", "value":"0"}}
+            },
+            {
+                "name": "voltage_out_of_range",
+                "expr": "voltage < 200 OR voltage > 250",
+                "action": "set_null",
+                "params": {"target_columns":["voltage"]}
+            },
+            {
+                "name": "global_intensity_too_high",
+                "expr": "global_intensity > 100",
+                "action": "set_null",
+                "params": {"target_columns":["global_intensity"]}
+            }
+        ]
+    }'::jsonb,
+    TRUE
+);
+
+-- шаг 14: исправление аномалий на основе правил (выполнение изменений)
+-- пояснение: применение действий к строкам с нарушениями, реальная модификация данных
+SELECT anomaly_fix_rule_based(
+    'public',
+    'power_consumption',
+    NULL,
+    ARRAY['id'],
+    NULL,
+    '{
+        "rules": [
+            {
+                "name": "neg_global_active_power",
+                "expr": "global_active_power < 0",
+                "action": "set_value",
+                "params": {"set_value": {"column":"global_active_power", "value":"0"}}
+            },
+            {
+                "name": "neg_global_reactive_power",
+                "expr": "global_reactive_power < 0",
+                "action": "set_value",
+                "params": {"set_value": {"column":"global_reactive_power", "value":"0"}}
+            },
+            {
+                "name": "voltage_out_of_range",
+                "expr": "voltage < 200 OR voltage > 250",
+                "action": "set_null",
+                "params": {"target_columns":["voltage"]}
+            },
+            {
+                "name": "global_intensity_too_high",
+                "expr": "global_intensity > 100",
+                "action": "set_null",
+                "params": {"target_columns":["global_intensity"]}
+            }
+        ]
+    }'::jsonb,
+    FALSE
+);
