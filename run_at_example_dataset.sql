@@ -257,3 +257,92 @@ SELECT anomaly_fix_rule_based(
     }'::jsonb,
     FALSE
 );
+
+-- шаг 15: базовое обнаружение аномалий по всем числовым колонкам
+-- пояснение: выявление временных аномалий во всех числовых столбцах таблицы с использованием скользящего окна анализа
+SELECT public.anomaly_detect_timeseries(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := NULL,
+    p_key_cols       := NULL,
+    p_params         := '{"time_column":"measurement_timestamp"}'::JSONB,
+    p_dry_run        := TRUE
+);
+
+-- шаг 16: обнаружение аномалий только по активной мощности и напряжению
+-- пояснение: выявление временных аномалий в двух целевых столбцах с увеличенным размером окна и пониженным порогом чувствительности
+SELECT public.anomaly_detect_timeseries(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['global_active_power','voltage'],
+    p_key_cols       := NULL,
+    p_params         := '{
+        "time_column":"measurement_timestamp",
+        "window_size":14,
+        "z_threshold":2.5
+    }'::JSONB,
+    p_dry_run        := TRUE
+);
+
+-- шаг 17:обнаружение аномалий с группировкой по id
+-- пояснение: выявление временных аномалий отдельно для каждого идентификатора с уменьшенным размером анализируемого окна
+SELECT public.anomaly_detect_timeseries(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['global_active_power'],
+    p_key_cols       := ARRAY['id'],
+    p_params         := '{
+        "time_column":"measurement_timestamp",
+        "window_size":7,
+        "z_threshold":3
+    }'::JSONB,
+    p_dry_run        := TRUE
+);
+
+-- шаг 18: замена аномальных значений на скользящее среднее
+-- пояснение: замещение выявленных выбросов значениями скользящего среднего для сглаживания экстремальных отклонений
+SELECT public.anomaly_fix_timeseries(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['global_active_power'],
+    p_key_cols       := NULL,
+    p_action         := 'replace_with_mean',
+    p_params         := '{
+        "time_column":"measurement_timestamp",
+        "window_size":7,
+        "z_threshold":3
+    }'::JSONB,
+    p_dry_run        := FALSE
+);
+
+-- шаг 19: замена аномальных значений установкой NULL (без реального изменения данных)
+-- пояснение: выявление аномальных значений и планирование их обнуления в пробном режиме без применения изменений
+SELECT public.anomaly_fix_timeseries(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['voltage'],
+    p_key_cols       := NULL,
+    p_action         := 'nullify',
+    p_params         := '{
+        "time_column":"measurement_timestamp",
+        "window_size":10,
+        "z_threshold":2.8
+    }'::JSONB,
+    p_dry_run        := TRUE
+);
+
+-- шаг 20: удаление строк с экстремальными аномалиями
+-- пояснение: исключение из таблицы строк с очень экстремальными выбросами, превышающими четырехсигма-отклонение
+SELECT public.anomaly_fix_timeseries(
+    p_schema         := 'public',
+    p_table          := 'power_consumption',
+    p_target_columns := ARRAY['global_intensity'],
+    p_key_cols       := NULL,
+    p_action         := 'delete',
+    p_params         := '{
+        "time_column":"measurement_timestamp",
+        "window_size":5,
+        "z_threshold":4
+    }'::JSONB,
+    p_dry_run        := FALSE
+);
