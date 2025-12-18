@@ -1,6 +1,6 @@
 # Anomaly Framework (PostgreSQL)
 
-фреймворк для поиска и фиксации аномалий в таблицах postgresql. все операции журналируются в таблицах audit.
+фреймворк для поиска и фиксации аномалий в таблицах postgresql, все операции журналируются в таблицах audit
 
 ## Метаданные аудита
 - public.dedup_audit: шапка запуска (schema, table, key_cols, action, dry_run, groups_processed, details jsonb)
