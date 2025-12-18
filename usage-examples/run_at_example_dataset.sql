@@ -1,5 +1,5 @@
 -- шаг 1: обнаружение пропусков с большим лимитом выборки для отчета
-SELECT public.anomaly_detect_missing(
+SELECT anomaly_detect_missing(
   p_schema         := 'public',
   p_table          := 'power_consumption',
   p_target_columns := ARRAY['global_active_power','global_reactive_power','voltage','global_intensity','sub_metering_1','sub_metering_2','sub_metering_3'],
@@ -10,7 +10,7 @@ SELECT public.anomaly_detect_missing(
 
 -- шаг 2: пробный сценарий исправления пропусков без применения изменений (dry run)
 -- пояснение: вывод планируемых действий и объем затронутых строк без модификации данных
-SELECT public.anomaly_fix_missing(
+SELECT anomaly_fix_missing(
   p_schema         := 'public',
   p_table          := 'power_consumption',
   p_target_columns := NULL,
@@ -32,7 +32,7 @@ SELECT public.anomaly_fix_missing(
 
 -- шаг 3: применение исправлений пропусков
 -- пояснение: использование разных стратегий для колонок, сухой прогон отключен, изменения вносятся
-SELECT public.anomaly_fix_missing(
+SELECT anomaly_fix_missing(
   p_schema         := 'public',
   p_table          := 'power_consumption',
   p_target_columns := NULL,
@@ -53,7 +53,7 @@ SELECT public.anomaly_fix_missing(
 );
 
 -- шаг 4: обнаружение дубликатов по полному набору показателей и времени измерения
-SELECT public.anomaly_detect_duplicates(
+SELECT anomaly_detect_duplicates(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['measurement_timestamp','global_active_power','global_reactive_power','voltage','global_intensity','sub_metering_1','sub_metering_2','sub_metering_3'],
@@ -64,7 +64,7 @@ SELECT public.anomaly_detect_duplicates(
 
 -- шаг 5: удаление дубликатов с сохранением первой записи в каждой группе
 -- пояснение: при p_dry_run=false выполняется удаление строк, аудит сохраняет детали
-SELECT public.anomaly_fix_duplicates(
+SELECT anomaly_fix_duplicates(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['measurement_timestamp','global_active_power','global_reactive_power','voltage','global_intensity','sub_metering_1','sub_metering_2','sub_metering_3'],
@@ -76,7 +76,7 @@ SELECT public.anomaly_fix_duplicates(
 
 -- шаг 6: обнаружение выбросов по глобальной активной мощности методом iqr
 -- пояснение: p_dry_run=true значит только логирование, без изменений
-SELECT public.anomaly_detect_outliers(
+SELECT anomaly_detect_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['global_active_power'],
@@ -87,7 +87,7 @@ SELECT public.anomaly_detect_outliers(
 
 -- шаг 7: фиксация выбросов по напряжению методом zscore, установка флага в отдельную колонку
 -- пояснение: добавление колонки voltage_outlier при необходимости, далее выставление флага
-SELECT public.anomaly_fix_outliers(
+SELECT anomaly_fix_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['voltage'],
@@ -98,7 +98,7 @@ SELECT public.anomaly_fix_outliers(
 );
 
 -- шаг 8: фиксация выбросов по реактивной мощности методом mad, замена на медиану
-SELECT public.anomaly_fix_outliers(
+SELECT anomaly_fix_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['global_reactive_power'],
@@ -110,7 +110,7 @@ SELECT public.anomaly_fix_outliers(
 
 -- шаг 9: фиксация выбросов по глобальной силе тока методом iqr с ограничением значений
 -- пояснение: обрезание значений, превышающих границы межквартильного диапазона, приведение их к максимально допустимым пределам
-SELECT public.anomaly_fix_outliers(
+SELECT anomaly_fix_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['global_intensity'],
@@ -122,7 +122,7 @@ SELECT public.anomaly_fix_outliers(
 
 -- шаг 10: обнаружение выбросов по sub_metering_1 методом mad, только логирование
 -- пояснение: выявление аномалий с использованием абсолютного отклонения от медианы без реальной обработки данных
-SELECT public.anomaly_detect_outliers(
+SELECT anomaly_detect_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['sub_metering_1'],
@@ -133,7 +133,7 @@ SELECT public.anomaly_detect_outliers(
 
 -- шаг 11: обнаружение выбросов по sub_metering_2 методом mad, только логирование
 -- пояснение:выявление аномалий с использованием абсолютного отклонения от медианы без реальной обработки данных
-SELECT public.anomaly_detect_outliers(
+SELECT anomaly_detect_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['sub_metering_2'],
@@ -260,7 +260,7 @@ SELECT anomaly_fix_rule_based(
 
 -- шаг 15: базовое обнаружение аномалий по всем числовым колонкам
 -- пояснение: выявление временных аномалий во всех числовых столбцах таблицы с использованием скользящего окна анализа
-SELECT public.anomaly_detect_timeseries(
+SELECT anomaly_detect_timeseries(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := NULL,
@@ -271,7 +271,7 @@ SELECT public.anomaly_detect_timeseries(
 
 -- шаг 16: обнаружение аномалий только по активной мощности и напряжению
 -- пояснение: выявление временных аномалий в двух целевых столбцах с увеличенным размером окна и пониженным порогом чувствительности
-SELECT public.anomaly_detect_timeseries(
+SELECT anomaly_detect_timeseries(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['global_active_power','voltage'],
@@ -286,7 +286,7 @@ SELECT public.anomaly_detect_timeseries(
 
 -- шаг 17:обнаружение аномалий с группировкой по id
 -- пояснение: выявление временных аномалий отдельно для каждого идентификатора с уменьшенным размером анализируемого окна
-SELECT public.anomaly_detect_timeseries(
+SELECT anomaly_detect_timeseries(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['global_active_power'],
@@ -301,7 +301,7 @@ SELECT public.anomaly_detect_timeseries(
 
 -- шаг 18: замена аномальных значений на скользящее среднее
 -- пояснение: замещение выявленных выбросов значениями скользящего среднего для сглаживания экстремальных отклонений
-SELECT public.anomaly_fix_timeseries(
+SELECT anomaly_fix_timeseries(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['global_active_power'],
@@ -317,7 +317,7 @@ SELECT public.anomaly_fix_timeseries(
 
 -- шаг 19: замена аномальных значений установкой NULL (без реального изменения данных)
 -- пояснение: выявление аномальных значений и планирование их обнуления в пробном режиме без применения изменений
-SELECT public.anomaly_fix_timeseries(
+SELECT anomaly_fix_timeseries(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['voltage'],
@@ -333,7 +333,7 @@ SELECT public.anomaly_fix_timeseries(
 
 -- шаг 20: удаление строк с экстремальными аномалиями
 -- пояснение: исключение из таблицы строк с очень экстремальными выбросами, превышающими четырехсигма-отклонение
-SELECT public.anomaly_fix_timeseries(
+SELECT anomaly_fix_timeseries(
     p_schema         := 'public',
     p_table          := 'power_consumption',
     p_target_columns := ARRAY['global_intensity'],

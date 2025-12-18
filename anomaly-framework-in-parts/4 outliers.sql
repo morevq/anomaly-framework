@@ -2,7 +2,7 @@
 -- общая идея: статистика по числовой колонке, вычисление порогов по выбранному методу, аудит найденных строк, опциональное исправление
 
 -- внутренний модуль для повторного использования
-CREATE OR REPLACE FUNCTION public._outlier_core(
+CREATE OR REPLACE FUNCTION _outlier_core(
     p_schema text,
     p_table text,
     p_col text,
@@ -114,7 +114,7 @@ BEGIN
                 'note', 'mad равно нулю или null, выбросы не выявлены'
             );
 
-            INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+            INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
             VALUES (p_schema, p_table, p_key_cols, CASE WHEN p_mode='fix' THEN 'outliers_fix' ELSE 'outliers_detect' END, p_dry_run, out_count, detail)
             RETURNING id INTO audit_id;
 
@@ -155,7 +155,7 @@ BEGIN
     );
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
     VALUES (p_schema, p_table, p_key_cols, CASE WHEN p_mode='fix' THEN 'outliers_fix' ELSE 'outliers_detect' END, p_dry_run, out_count, detail)
     RETURNING id INTO audit_id;
 
@@ -173,7 +173,7 @@ BEGIN
         'SELECT ctid::text AS ctid_txt, %s AS group_key, %I::double precision AS val FROM %I.%I WHERE %s',
         key_expr, p_col, p_schema, p_table, cond_sql
     ) LOOP
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
         VALUES (
             audit_id,
             rec.group_key,
@@ -225,7 +225,7 @@ END;
 $$;
 
 -- обнаружение выбросов
-CREATE OR REPLACE FUNCTION public.anomaly_detect_outliers(
+CREATE OR REPLACE FUNCTION anomaly_detect_outliers(
     p_schema text,
     p_table text,
     p_target_columns text[],                 -- ровно одна числовая колонка
@@ -242,12 +242,12 @@ BEGIN
         RAISE EXCEPTION 'outliers detect requires exactly one target column';
     END IF;
     col := p_target_columns[1];
-    RETURN public._outlier_core(p_schema, p_table, col, p_key_cols, NULL, p_params, p_dry_run, 'detect');
+    RETURN _outlier_core(p_schema, p_table, col, p_key_cols, NULL, p_params, p_dry_run, 'detect');
 END;
 $$;
 
 -- фиксация выбросов
-CREATE OR REPLACE FUNCTION public.anomaly_fix_outliers(
+CREATE OR REPLACE FUNCTION anomaly_fix_outliers(
     p_schema text,
     p_table text,
     p_target_columns text[],                 -- ровно одна числовая колонка
@@ -265,6 +265,6 @@ BEGIN
         RAISE EXCEPTION 'outliers fix requires exactly one target column';
     END IF;
     col := p_target_columns[1];
-    RETURN public._outlier_core(p_schema, p_table, col, p_key_cols, p_action, p_params, p_dry_run, 'fix');
+    RETURN _outlier_core(p_schema, p_table, col, p_key_cols, p_action, p_params, p_dry_run, 'fix');
 END;
 $$;

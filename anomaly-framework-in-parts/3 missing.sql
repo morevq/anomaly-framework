@@ -2,7 +2,7 @@
 -- общая идея: проверка заданных колонок на null или пустую строку (для текстовых), аудит найденных строк, гибкие стратегии заполнения
 
 -- обнаружение пропусков
-CREATE OR REPLACE FUNCTION public.anomaly_detect_missing(
+CREATE OR REPLACE FUNCTION anomaly_detect_missing(
     p_schema text,
     p_table text,
     p_target_columns text[],                 -- список колонок для проверки
@@ -38,7 +38,7 @@ BEGIN
     END IF;
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
+    INSERT INTO dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
     VALUES (p_schema, p_table, p_key_cols, 'missing_detect', p_dry_run, jsonb_build_object('limit_sample', limit_sample))
     RETURNING id INTO v_audit_id;
 
@@ -93,7 +93,7 @@ BEGIN
         );
 
         FOR rec IN EXECUTE dyn_sql LOOP
-            INSERT INTO public.dedup_audit_rows (audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows (audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 rec.group_key,
@@ -110,7 +110,7 @@ BEGIN
     END LOOP;
 
     -- итог аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_total,
         details = coalesce(details, '{}'::jsonb) || jsonb_build_object(
             'detected_missing_rows', v_total,
@@ -132,7 +132,7 @@ END;
 $$;
 
 -- фиксация пропусков
-CREATE OR REPLACE FUNCTION public.anomaly_fix_missing(
+CREATE OR REPLACE FUNCTION anomaly_fix_missing(
     p_schema text,
     p_table text,
     p_target_columns text[] DEFAULT NULL,    -- для унификации
@@ -164,7 +164,7 @@ DECLARE
     v_rowcount bigint;       -- счет затронутых строк
 BEGIN
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit (
+    INSERT INTO dedup_audit (
         db_schema, db_table, key_cols, action, dry_run, details
     )
     VALUES (
@@ -374,7 +374,7 @@ BEGIN
     END LOOP;
 
     -- итог аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_total
     WHERE id = v_audit_id;
 

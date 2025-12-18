@@ -54,7 +54,7 @@ BEGIN
     END IF;
 
     -- создание записи аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
     VALUES (p_schema, p_table, p_key_cols, 'detect_rule_based', p_dry_run, 0, '{}'::JSONB)
     RETURNING id INTO v_audit_id;
 
@@ -99,7 +99,7 @@ BEGIN
         END IF;
 
         -- запись строки аудита для правила
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
         VALUES (
             v_audit_id,
             COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -126,8 +126,8 @@ BEGIN
     END LOOP;
 
     -- обновление общей записи аудита
-    UPDATE public.dedup_audit
-    SET groups_processed = (SELECT COUNT(*) FROM public.dedup_audit_rows WHERE audit_id = v_audit_id),
+    UPDATE dedup_audit
+    SET groups_processed = (SELECT COUNT(*) FROM dedup_audit_rows WHERE audit_id = v_audit_id),
         details = JSONB_BUILD_OBJECT(
             'rules_count', JSONB_ARRAY_LENGTH(v_rules),
             'rules', v_rules_summary
@@ -137,7 +137,7 @@ BEGIN
     RETURN JSONB_BUILD_OBJECT(
         'status','ok',
         'audit_id', v_audit_id,
-        'details', (SELECT details FROM public.dedup_audit WHERE id = v_audit_id)
+        'details', (SELECT details FROM dedup_audit WHERE id = v_audit_id)
     );
 END;
 $$;
@@ -186,7 +186,7 @@ BEGIN
     END IF;
 
     -- создание записи аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
     VALUES (p_schema, p_table, p_key_cols, 'fix_rule_based', p_dry_run, 0, '{}'::JSONB)
     RETURNING id INTO v_audit_id;
 
@@ -196,7 +196,7 @@ BEGIN
         v_idx := v_idx + 1;
 
         IF (v_rule->>'expr') IS NULL THEN
-            INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -220,7 +220,7 @@ BEGIN
 
         -- dry-run или report: только запись в аудит
         IF v_action_rule = 'report' OR p_dry_run THEN
-            INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -269,7 +269,7 @@ BEGIN
             END IF;
 
             -- запись результатов в аудит
-            INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -284,7 +284,7 @@ BEGIN
     END LOOP;
 
     -- обновление общей записи аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_groups_processed,
         details = JSONB_BUILD_OBJECT(
             'rules_count', JSONB_ARRAY_LENGTH(v_rules),
@@ -303,7 +303,7 @@ BEGIN
 
 EXCEPTION
     WHEN OTHERS THEN
-        UPDATE public.dedup_audit
+        UPDATE dedup_audit
         SET details = JSONB_BUILD_OBJECT('error', SQLSTATE, 'message', SQLERRM)
         WHERE id = v_audit_id;
         RAISE;

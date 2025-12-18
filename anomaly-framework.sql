@@ -1,6 +1,6 @@
 -- таблицы метаданных для аудита операций по поиску и фиксации аномалий
 -- dedup_audit хранит шапку запуска: время, схему, таблицу, ключи, действие, флаг сухого прогона, число обработанных групп и произвольные детали
-CREATE TABLE public.dedup_audit (
+CREATE TABLE dedup_audit (
     id serial PRIMARY KEY,            -- идентификатор записи аудита
     run_ts timestamptz DEFAULT now(), -- отметка времени запуска
     db_schema text,                   -- имя схемы целевой таблицы
@@ -13,9 +13,9 @@ CREATE TABLE public.dedup_audit (
 );
 
 -- dedup_audit_rows хранит детальные строки аудита: ключ группы, оставленный ctid, удаленные ctid, заметку и дополнительные поля
-CREATE TABLE public.dedup_audit_rows (
+CREATE TABLE dedup_audit_rows (
     id serial PRIMARY KEY,                               -- идентификатор записи детали
-    audit_id int REFERENCES public.dedup_audit(id) ON DELETE CASCADE, -- связь с шапкой аудита
+    audit_id int REFERENCES dedup_audit(id) ON DELETE CASCADE, -- связь с шапкой аудита
     group_key text,                                      -- значение ключа группы или составной ключ
     kept_ctid text,                                      -- ctid оставленной строки
     removed_ctids text[],                                -- массив ctid затронутых строк
@@ -27,7 +27,7 @@ CREATE TABLE public.dedup_audit_rows (
 -- общая идея: формируем ключ группы (md5 от выбранных колонок), ведем аудит, при фиксации удаляем лишние строки
 
 -- обнаружение дубликатов
-CREATE OR REPLACE FUNCTION public.anomaly_detect_duplicates(
+CREATE OR REPLACE FUNCTION anomaly_detect_duplicates(
     p_schema text,
     p_table text,
     p_target_columns text[] DEFAULT NULL,   -- явный список колонок ключа, если не задано, используем p_key_cols или все колонки
@@ -71,7 +71,7 @@ BEGIN
     END IF;
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
+    INSERT INTO dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
     VALUES (p_schema, p_table, COALESCE(p_target_columns, p_key_cols), 'duplicates_detect', p_dry_run,
             jsonb_build_object('sample_limit', sample_limit))
     RETURNING id INTO audit_id;
@@ -95,7 +95,7 @@ BEGIN
     FOR rec IN EXECUTE qry LOOP
         dedup_groups := dedup_groups + 1;
 
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
         VALUES (
             audit_id,
             rec.group_md5::text,
@@ -107,7 +107,7 @@ BEGIN
     END LOOP;
 
     -- обновление итога аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = dedup_groups
     WHERE id = audit_id;
 
@@ -122,7 +122,7 @@ END;
 $$;
 
 -- фиксация дубликатов
-CREATE OR REPLACE FUNCTION public.anomaly_fix_duplicates(
+CREATE OR REPLACE FUNCTION anomaly_fix_duplicates(
     p_schema text,
     p_table text,
     p_target_columns text[] DEFAULT NULL,   -- явный ключ
@@ -174,7 +174,7 @@ BEGIN
     END IF;
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, details)
     VALUES (p_schema, p_table, COALESCE(p_target_columns, p_key_cols), 'duplicates_fix', p_dry_run, jsonb_build_object('keep', keep, 'action', p_action))
     RETURNING id INTO audit_id;
 
@@ -209,7 +209,7 @@ BEGIN
             EXECUTE delete_q;
         END IF;
 
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note)
         VALUES (
             audit_id,
             rec.group_md5,
@@ -220,7 +220,7 @@ BEGIN
     END LOOP;
 
     -- обновление итога аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = dedup_groups
     WHERE id = audit_id;
 
@@ -238,7 +238,7 @@ $$;
 -- общая идея: проверка заданных колонок на null или пустую строку (для текстовых), аудит найденных строк, гибкие стратегии заполнения
 
 -- обнаружение пропусков
-CREATE OR REPLACE FUNCTION public.anomaly_detect_missing(
+CREATE OR REPLACE FUNCTION anomaly_detect_missing(
     p_schema text,
     p_table text,
     p_target_columns text[],                 -- список колонок для проверки
@@ -274,7 +274,7 @@ BEGIN
     END IF;
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
+    INSERT INTO dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
     VALUES (p_schema, p_table, p_key_cols, 'missing_detect', p_dry_run, jsonb_build_object('limit_sample', limit_sample))
     RETURNING id INTO v_audit_id;
 
@@ -329,7 +329,7 @@ BEGIN
         );
 
         FOR rec IN EXECUTE dyn_sql LOOP
-            INSERT INTO public.dedup_audit_rows (audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows (audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 rec.group_key,
@@ -346,7 +346,7 @@ BEGIN
     END LOOP;
 
     -- итог аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_total,
         details = coalesce(details, '{}'::jsonb) || jsonb_build_object(
             'detected_missing_rows', v_total,
@@ -368,7 +368,7 @@ END;
 $$;
 
 -- фиксация пропусков
-CREATE OR REPLACE FUNCTION public.anomaly_fix_missing(
+CREATE OR REPLACE FUNCTION anomaly_fix_missing(
     p_schema text,
     p_table text,
     p_target_columns text[] DEFAULT NULL,    -- для унификации
@@ -400,7 +400,7 @@ DECLARE
     v_rowcount bigint;       -- счет затронутых строк
 BEGIN
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit (
+    INSERT INTO dedup_audit (
         db_schema, db_table, key_cols, action, dry_run, details
     )
     VALUES (
@@ -610,7 +610,7 @@ BEGIN
     END LOOP;
 
     -- итог аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_total
     WHERE id = v_audit_id;
 
@@ -628,7 +628,7 @@ $$;
 -- общая идея: статистика по числовой колонке, вычисление порогов по выбранному методу, аудит найденных строк, опциональное исправление
 
 -- внутренний модуль для повторного использования
-CREATE OR REPLACE FUNCTION public._outlier_core(
+CREATE OR REPLACE FUNCTION _outlier_core(
     p_schema text,
     p_table text,
     p_col text,
@@ -740,7 +740,7 @@ BEGIN
                 'note', 'mad равно нулю или null, выбросы не выявлены'
             );
 
-            INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+            INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
             VALUES (p_schema, p_table, p_key_cols, CASE WHEN p_mode='fix' THEN 'outliers_fix' ELSE 'outliers_detect' END, p_dry_run, out_count, detail)
             RETURNING id INTO audit_id;
 
@@ -781,7 +781,7 @@ BEGIN
     );
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
     VALUES (p_schema, p_table, p_key_cols, CASE WHEN p_mode='fix' THEN 'outliers_fix' ELSE 'outliers_detect' END, p_dry_run, out_count, detail)
     RETURNING id INTO audit_id;
 
@@ -799,7 +799,7 @@ BEGIN
         'SELECT ctid::text AS ctid_txt, %s AS group_key, %I::double precision AS val FROM %I.%I WHERE %s',
         key_expr, p_col, p_schema, p_table, cond_sql
     ) LOOP
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
         VALUES (
             audit_id,
             rec.group_key,
@@ -851,7 +851,7 @@ END;
 $$;
 
 -- обнаружение выбросов
-CREATE OR REPLACE FUNCTION public.anomaly_detect_outliers(
+CREATE OR REPLACE FUNCTION anomaly_detect_outliers(
     p_schema text,
     p_table text,
     p_target_columns text[],                 -- ровно одна числовая колонка
@@ -868,12 +868,12 @@ BEGIN
         RAISE EXCEPTION 'outliers detect requires exactly one target column';
     END IF;
     col := p_target_columns[1];
-    RETURN public._outlier_core(p_schema, p_table, col, p_key_cols, NULL, p_params, p_dry_run, 'detect');
+    RETURN _outlier_core(p_schema, p_table, col, p_key_cols, NULL, p_params, p_dry_run, 'detect');
 END;
 $$;
 
 -- фиксация выбросов
-CREATE OR REPLACE FUNCTION public.anomaly_fix_outliers(
+CREATE OR REPLACE FUNCTION anomaly_fix_outliers(
     p_schema text,
     p_table text,
     p_target_columns text[],                 -- ровно одна числовая колонка
@@ -891,7 +891,7 @@ BEGIN
         RAISE EXCEPTION 'outliers fix requires exactly one target column';
     END IF;
     col := p_target_columns[1];
-    RETURN public._outlier_core(p_schema, p_table, col, p_key_cols, p_action, p_params, p_dry_run, 'fix');
+    RETURN _outlier_core(p_schema, p_table, col, p_key_cols, p_action, p_params, p_dry_run, 'fix');
 END;
 $$;
 
@@ -951,7 +951,7 @@ BEGIN
     END IF;
 
     -- создание записи аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
     VALUES (p_schema, p_table, p_key_cols, 'detect_rule_based', p_dry_run, 0, '{}'::JSONB)
     RETURNING id INTO v_audit_id;
 
@@ -996,7 +996,7 @@ BEGIN
         END IF;
 
         -- запись строки аудита для правила
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
         VALUES (
             v_audit_id,
             COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -1023,8 +1023,8 @@ BEGIN
     END LOOP;
 
     -- обновление общей записи аудита
-    UPDATE public.dedup_audit
-    SET groups_processed = (SELECT COUNT(*) FROM public.dedup_audit_rows WHERE audit_id = v_audit_id),
+    UPDATE dedup_audit
+    SET groups_processed = (SELECT COUNT(*) FROM dedup_audit_rows WHERE audit_id = v_audit_id),
         details = JSONB_BUILD_OBJECT(
             'rules_count', JSONB_ARRAY_LENGTH(v_rules),
             'rules', v_rules_summary
@@ -1034,7 +1034,7 @@ BEGIN
     RETURN JSONB_BUILD_OBJECT(
         'status','ok',
         'audit_id', v_audit_id,
-        'details', (SELECT details FROM public.dedup_audit WHERE id = v_audit_id)
+        'details', (SELECT details FROM dedup_audit WHERE id = v_audit_id)
     );
 END;
 $$;
@@ -1083,7 +1083,7 @@ BEGIN
     END IF;
 
     -- создание записи аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, groups_processed, details)
     VALUES (p_schema, p_table, p_key_cols, 'fix_rule_based', p_dry_run, 0, '{}'::JSONB)
     RETURNING id INTO v_audit_id;
 
@@ -1093,7 +1093,7 @@ BEGIN
         v_idx := v_idx + 1;
 
         IF (v_rule->>'expr') IS NULL THEN
-            INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -1117,7 +1117,7 @@ BEGIN
 
         -- dry-run или report: только запись в аудит
         IF v_action_rule = 'report' OR p_dry_run THEN
-            INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -1166,7 +1166,7 @@ BEGIN
             END IF;
 
             -- запись результатов в аудит
-            INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+            INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
             VALUES (
                 v_audit_id,
                 COALESCE(v_rule->>'name', FORMAT('rule_%s', v_idx)),
@@ -1181,7 +1181,7 @@ BEGIN
     END LOOP;
 
     -- обновление общей записи аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_groups_processed,
         details = JSONB_BUILD_OBJECT(
             'rules_count', JSONB_ARRAY_LENGTH(v_rules),
@@ -1200,7 +1200,7 @@ BEGIN
 
 EXCEPTION
     WHEN OTHERS THEN
-        UPDATE public.dedup_audit
+        UPDATE dedup_audit
         SET details = JSONB_BUILD_OBJECT('error', SQLSTATE, 'message', SQLERRM)
         WHERE id = v_audit_id;
         RAISE;
@@ -1208,7 +1208,7 @@ END;
 $$;
 
 -- обнаружение аномалий во временных рядах с использованием скользящих статистик
-CREATE OR REPLACE FUNCTION public.anomaly_detect_timeseries(
+CREATE OR REPLACE FUNCTION anomaly_detect_timeseries(
     p_schema TEXT,
     p_table TEXT,
     p_target_columns TEXT[] DEFAULT NULL,
@@ -1262,7 +1262,7 @@ BEGIN
 
     -- логирование инициирования анализа в аудит-таблице с сохранением параметров вызова
     -- запись включает временную метку, схему, таблицу и указанные ключевые колонки
-    INSERT INTO public.dedup_audit(
+    INSERT INTO dedup_audit(
         run_ts, db_schema, db_table, key_cols,
         action, dry_run, groups_processed, details
     )
@@ -1385,7 +1385,7 @@ BEGIN
     ) INTO v_groups, v_anoms;
 
     -- обновление аудит-записи с результатами анализа, включая количество обработанных групп, параметры и общее число выявленных аномалий
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_groups,
         details = JSONB_BUILD_OBJECT(
             'window_size', v_window_size,
@@ -1404,7 +1404,7 @@ END;
 $$;
 
 
-CREATE OR REPLACE FUNCTION public.anomaly_fix_timeseries(
+CREATE OR REPLACE FUNCTION anomaly_fix_timeseries(
     p_schema TEXT,
     p_table TEXT,
     p_target_columns TEXT[] DEFAULT NULL,
@@ -1457,7 +1457,7 @@ BEGIN
 
     -- логирование инициирования исправления в аудит-таблице с сохранением параметров вызова
     -- запись включает временную метку, схему, таблицу, указанные ключевые колонки и выбранное действие
-    INSERT INTO public.dedup_audit(
+    INSERT INTO dedup_audit(
         run_ts, db_schema, db_table, key_cols,
         action, dry_run, groups_processed, details
     )
@@ -1621,7 +1621,7 @@ BEGIN
     INTO v_fixed;
 
     -- обновление аудит-записи с результатами исправления, включая количество обработанных строк, выбранное действие и статус пробного запуска
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_fixed,
         details = JSONB_BUILD_OBJECT(
             'fixed_rows', v_fixed,

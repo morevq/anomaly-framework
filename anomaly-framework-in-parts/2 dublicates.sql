@@ -2,7 +2,7 @@
 -- общая идея: формируем ключ группы (md5 от выбранных колонок), ведем аудит, при фиксации удаляем лишние строки
 
 -- обнаружение дубликатов
-CREATE OR REPLACE FUNCTION public.anomaly_detect_duplicates(
+CREATE OR REPLACE FUNCTION anomaly_detect_duplicates(
     p_schema text,
     p_table text,
     p_target_columns text[] DEFAULT NULL,   -- явный список колонок ключа, если не задано, используем p_key_cols или все колонки
@@ -46,7 +46,7 @@ BEGIN
     END IF;
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
+    INSERT INTO dedup_audit (db_schema, db_table, key_cols, action, dry_run, details)
     VALUES (p_schema, p_table, COALESCE(p_target_columns, p_key_cols), 'duplicates_detect', p_dry_run,
             jsonb_build_object('sample_limit', sample_limit))
     RETURNING id INTO audit_id;
@@ -70,7 +70,7 @@ BEGIN
     FOR rec IN EXECUTE qry LOOP
         dedup_groups := dedup_groups + 1;
 
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note, extra)
         VALUES (
             audit_id,
             rec.group_md5::text,
@@ -82,7 +82,7 @@ BEGIN
     END LOOP;
 
     -- обновление итога аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = dedup_groups
     WHERE id = audit_id;
 
@@ -97,7 +97,7 @@ END;
 $$;
 
 -- фиксация дубликатов
-CREATE OR REPLACE FUNCTION public.anomaly_fix_duplicates(
+CREATE OR REPLACE FUNCTION anomaly_fix_duplicates(
     p_schema text,
     p_table text,
     p_target_columns text[] DEFAULT NULL,   -- явный ключ
@@ -149,7 +149,7 @@ BEGIN
     END IF;
 
     -- сохранение шапки аудита
-    INSERT INTO public.dedup_audit(db_schema, db_table, key_cols, action, dry_run, details)
+    INSERT INTO dedup_audit(db_schema, db_table, key_cols, action, dry_run, details)
     VALUES (p_schema, p_table, COALESCE(p_target_columns, p_key_cols), 'duplicates_fix', p_dry_run, jsonb_build_object('keep', keep, 'action', p_action))
     RETURNING id INTO audit_id;
 
@@ -184,7 +184,7 @@ BEGIN
             EXECUTE delete_q;
         END IF;
 
-        INSERT INTO public.dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note)
+        INSERT INTO dedup_audit_rows(audit_id, group_key, kept_ctid, removed_ctids, note)
         VALUES (
             audit_id,
             rec.group_md5,
@@ -195,7 +195,7 @@ BEGIN
     END LOOP;
 
     -- обновление итога аудита
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = dedup_groups
     WHERE id = audit_id;
 

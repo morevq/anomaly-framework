@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION public.anomaly_detect_timeseries(
+CREATE OR REPLACE FUNCTION anomaly_detect_timeseries(
     p_schema TEXT,
     p_table TEXT,
     p_target_columns TEXT[] DEFAULT NULL,
@@ -52,7 +52,7 @@ BEGIN
 
     -- логирование инициирования анализа в аудит-таблице с сохранением параметров вызова
     -- запись включает временную метку, схему, таблицу и указанные ключевые колонки
-    INSERT INTO public.dedup_audit(
+    INSERT INTO dedup_audit(
         run_ts, db_schema, db_table, key_cols,
         action, dry_run, groups_processed, details
     )
@@ -175,7 +175,7 @@ BEGIN
     ) INTO v_groups, v_anoms;
 
     -- обновление аудит-записи с результатами анализа, включая количество обработанных групп, параметры и общее число выявленных аномалий
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_groups,
         details = JSONB_BUILD_OBJECT(
             'window_size', v_window_size,
@@ -194,7 +194,7 @@ END;
 $$;
 
 
-CREATE OR REPLACE FUNCTION public.anomaly_fix_timeseries(
+CREATE OR REPLACE FUNCTION anomaly_fix_timeseries(
     p_schema TEXT,
     p_table TEXT,
     p_target_columns TEXT[] DEFAULT NULL,
@@ -247,7 +247,7 @@ BEGIN
 
     -- логирование инициирования исправления в аудит-таблице с сохранением параметров вызова
     -- запись включает временную метку, схему, таблицу, указанные ключевые колонки и выбранное действие
-    INSERT INTO public.dedup_audit(
+    INSERT INTO dedup_audit(
         run_ts, db_schema, db_table, key_cols,
         action, dry_run, groups_processed, details
     )
@@ -411,7 +411,7 @@ BEGIN
     INTO v_fixed;
 
     -- обновление аудит-записи с результатами исправления, включая количество обработанных строк, выбранное действие и статус пробного запуска
-    UPDATE public.dedup_audit
+    UPDATE dedup_audit
     SET groups_processed = v_fixed,
         details = JSONB_BUILD_OBJECT(
             'fixed_rows', v_fixed,
