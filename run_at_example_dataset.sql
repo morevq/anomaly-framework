@@ -109,6 +109,7 @@ SELECT public.anomaly_fix_outliers(
 );
 
 -- шаг 9: фиксация выбросов по глобальной силе тока методом iqr с ограничением значений
+-- пояснение: обрезание значений, превышающих границы межквартильного диапазона, приведение их к максимально допустимым пределам
 SELECT public.anomaly_fix_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
@@ -120,6 +121,7 @@ SELECT public.anomaly_fix_outliers(
 );
 
 -- шаг 10: обнаружение выбросов по sub_metering_1 методом mad, только логирование
+-- пояснение: выявление аномалий с использованием абсолютного отклонения от медианы без реальной обработки данных
 SELECT public.anomaly_detect_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
@@ -130,6 +132,7 @@ SELECT public.anomaly_detect_outliers(
 );
 
 -- шаг 11: обнаружение выбросов по sub_metering_2 методом mad, только логирование
+-- пояснение:выявление аномалий с использованием абсолютного отклонения от медианы без реальной обработки данных
 SELECT public.anomaly_detect_outliers(
     p_schema         := 'public',
     p_table          := 'power_consumption',
