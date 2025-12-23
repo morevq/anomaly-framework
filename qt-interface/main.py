@@ -12,6 +12,9 @@ from sqlalchemy import (create_engine, String, Float,
                         )
 from anomalies.missing_values import MissingValuesDialog
 from anomalies.duplicates import DuplicatesDialog
+from anomalies.outliers import OutliersDialog
+from anomalies.rules import RulesDialog
+from anomalies.timeseries import TimeSeriesDialog
 import json
 from sqlalchemy import text
 
@@ -179,6 +182,18 @@ class CSVImporterApp(QMainWindow):
         anomaly_layout.addWidget(self.btn_fix_dupes)
         main_layout.addLayout(anomaly_layout)
 
+        self.btn_fix_outliers = QPushButton("📉 Обработка выбросов")
+        self.btn_fix_outliers.clicked.connect(self.run_outliers_fix)
+        anomaly_layout.addWidget(self.btn_fix_outliers)
+
+        self.btn_rule_based = QPushButton("⚖️ Правила очистки")
+        self.btn_rule_based.clicked.connect(self.run_rule_based_fix)
+        anomaly_layout.addWidget(self.btn_rule_based)
+
+        self.btn_timeseries = QPushButton("📈 Временные ряды")
+        self.btn_timeseries.clicked.connect(self.run_timeseries_fix)
+        anomaly_layout.addWidget(self.btn_timeseries)
+
     def open_config(self):
         dialog = DbConfigDialog(self)
         if dialog.exec():
@@ -216,7 +231,6 @@ class CSVImporterApp(QMainWindow):
 
             header = 0 if self.has_header_cb.isChecked() else None
 
-            print(sep)
             # Читаем с учетом новых параметров
             self.df = pd.read_csv(
                 self.current_file,
@@ -228,7 +242,6 @@ class CSVImporterApp(QMainWindow):
                 keep_default_na=True,
                 encoding='utf-8-sig'
             )
-            print(self.df)
 
             if not self.has_header_cb.isChecked():
                 self.df.columns = [f"col_{i + 1}" for i in range(len(self.df.columns))]
@@ -273,7 +286,6 @@ class CSVImporterApp(QMainWindow):
 
             # АВТООПРЕДЕЛЕНИЕ ТИПА
             guessed_type = self.guess_sql_type(self.df[col].dtype)
-            print(guessed_type)
             combo.setCurrentText(guessed_type)
 
             self.mapping_table.setCellWidget(i, 2, combo)
@@ -360,6 +372,7 @@ class CSVImporterApp(QMainWindow):
                 # Здесь target_cols_names и select_exprs имеют одинаковую длину
                 ins_query = insert(target_table).from_select(
                     target_cols_names,
+
                     select(*select_exprs)
                 )
 
@@ -484,7 +497,119 @@ class CSVImporterApp(QMainWindow):
                 QMessageBox.critical(self, "Ошибка SQL",
                                      f"Ошибка при удалении дубликатов в '{target_table}':\n{str(e)}")
 
+    def run_outliers_fix(self):
+        target_table = self.table_name_input.text().strip()
+        if not target_table:
+            QMessageBox.warning(self, "Внимание", "Укажите имя таблицы.")
+            return
 
+        cols = [self.mapping_table.item(i, 1).text() for i in range(self.mapping_table.rowCount())]
+        dlg = OutliersDialog(cols, self)
+
+        if dlg.exec():
+            data = dlg.result_data
+            try:
+                with self.engine.begin() as conn:
+                    print(text(
+                        "SELECT anomaly_fix_outliers(:s, :t, :p_cols, :k_cols, :action, :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,
+                        "p_cols": [data["target_column"]],  # Оборачиваем в список для ARRAY
+                        "k_cols": ["id"],  # Предполагаем, что id всегда есть
+                        "action": data["action"],
+                        "params": json.dumps(data["params"]),
+                        "dry": data["dry_run"]
+                    })
+                    res = conn.execute(text(
+                        "SELECT anomaly_fix_outliers(:s, :t, :p_cols, :k_cols, :action, :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,
+                        "p_cols": [data["target_column"]],  # Оборачиваем в список для ARRAY
+                        "k_cols": ["id"],  # Предполагаем, что id всегда есть
+                        "action": data["action"],
+                        "params": json.dumps(data["params"]),
+                        "dry": data["dry_run"]
+                    }).scalar()
+                    self.show_audit_info(res)
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка SQL", f"Ошибка при обработке выбросов:\n{str(e)}")
+
+    def run_rule_based_fix(self):
+        target_table = self.table_name_input.text().strip()
+        if not target_table:
+            QMessageBox.warning(self, "Внимание", "Укажите имя таблицы.")
+            return
+
+        cols = [self.mapping_table.item(i, 1).text() for i in range(self.mapping_table.rowCount())]
+        dlg = RulesDialog(cols, self)
+
+        if dlg.exec():
+            data = dlg.result_data
+            try:
+                with self.engine.begin() as conn:
+                    res = conn.execute(text(
+                        "SELECT anomaly_fix_rule_based(:s, :t, NULL, :k_cols, NULL, :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,
+                        "k_cols": ["id"],
+                        "params": json.dumps({"rules": data["rules"]}),
+                        "dry": data["dry_run"]
+                    }).scalar()
+                    self.show_audit_info(res)
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка SQL", f"Ошибка Rule-based очистки:\n{str(e)}")
+
+    def run_timeseries_fix(self):
+        target_table = self.table_name_input.text().strip()
+        if not target_table:
+            QMessageBox.warning(self, "Внимание", "Укажите имя таблицы.")
+            return
+
+        # Получаем список колонок для диалога
+        cols = [self.mapping_table.item(i, 1).text() for i in range(self.mapping_table.rowCount())]
+        dlg = TimeSeriesDialog(cols, self)
+
+        if dlg.exec():
+            data = dlg.result_data
+            print(text(
+                        "SELECT anomaly_fix_timeseries(:s, :t, :p_cols, :k_cols, :action, :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,
+                        "p_cols": data["target_columns"],  # ARRAY или NULL
+                        "k_cols": ["id"],  # Используем id как ключ
+                        "action": data["action"],
+                        "params": json.dumps({
+                            "time_column": data["time_column"],
+                            "window_size": data["window_size"],
+                            "z_threshold": data["z_threshold"]
+                        }),
+                        "dry": data["dry_run"]
+                    })
+            try:
+                with self.engine.begin() as conn:
+                    # Вызываем функцию исправления (она внутри вызывает логику поиска)
+                    res = conn.execute(text(
+                        "SELECT anomaly_fix_timeseries(:s, :t, :p_cols, :k_cols, :action, :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,
+                        "p_cols": data["target_columns"],  # ARRAY или NULL
+                        "k_cols": ["id"],  # Используем id как ключ
+                        "action": data["action"],
+                        "params": json.dumps({
+                            "time_column": data["time_column"],
+                            "window_size": data["window_size"],
+                            "z_threshold": data["z_threshold"]
+                        }),
+                        "dry": data["dry_run"]
+                    }).scalar()
+                    self.show_audit_info(res)
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка SQL", f"Ошибка анализа временного ряда:\n{str(e)}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
