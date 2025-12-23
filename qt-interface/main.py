@@ -5,11 +5,15 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QTableWidgetItem, QComboBox, QHeaderView,
                                QMessageBox, QCheckBox, QHBoxLayout, QLabel,
                                QDialog, QLineEdit, QFormLayout)
-from PySide6.QtCore import QSettings
-from sqlalchemy import ( create_engine, String, Float,
-    MetaData, Table, Column, Text, Integer, Numeric,
-    insert, select, cast, func, DateTime, Date, Boolean, Time
-)
+from PySide6.QtCore import QSettings, Qt
+from sqlalchemy import (create_engine, String, Float,
+                        MetaData, Table, Column, Text, Integer, Numeric,
+                        insert, select, cast, func, DateTime, Date, Boolean, Time, case
+                        )
+from anomalies.missing_values import MissingValuesDialog
+from anomalies.duplicates import DuplicatesDialog
+import json
+from sqlalchemy import text
 
 # Типы данных для выбора
 SQL_TYPES = {
@@ -134,17 +138,17 @@ class CSVImporterApp(QMainWindow):
         csv_settings_layout = QHBoxLayout()
 
         csv_settings_layout.addWidget(QLabel("Delimiter:"))
-        self.quote_input = QLineEdit(';')
-        self.quote_input.setFixedWidth(50)
-        self.quote_input.textChanged.connect(self.reload_csv)
-        csv_settings_layout.addWidget(self.quote_input)
-
-        # Quote Character
-        csv_settings_layout.addWidget(QLabel("Quote:"))
-        self.delimiter_input = QLineEdit('"')
+        self.delimiter_input = QLineEdit(',')
         self.delimiter_input.setFixedWidth(50)
         self.delimiter_input.textChanged.connect(self.reload_csv)
         csv_settings_layout.addWidget(self.delimiter_input)
+
+        # Quote Character
+        csv_settings_layout.addWidget(QLabel("Quote:"))
+        self.quote_input = QLineEdit('"')
+        self.quote_input.setFixedWidth(50)
+        self.quote_input.textChanged.connect(self.reload_csv)
+        csv_settings_layout.addWidget(self.quote_input)
 
         # Escape Character
         csv_settings_layout.addWidget(QLabel("Escape:"))
@@ -163,9 +167,17 @@ class CSVImporterApp(QMainWindow):
         csv_settings_layout.addStretch()
         main_layout.insertLayout(2, csv_settings_layout)
 
-        # self.btn_detect_anomalies = QPushButton("🔍 Поиск аномалий")
-        # self.btn_detect_anomalies.clicked.connect(self.show_anomaly_dialog)
-        # main_layout.addWidget(self.btn_detect_anomalies)
+        self.btn_fix_missing = QPushButton("🧩 Исправить пропуски")
+        self.btn_fix_missing.clicked.connect(self.run_missing_fix)  # Метод уже обсуждали выше
+
+        self.btn_fix_dupes = QPushButton("👯 Найти дубликаты")
+        self.btn_fix_dupes.clicked.connect(self.run_duplicates_fix)  # Метод уже обсуждали выше
+
+        # Добавляем их в layout
+        anomaly_layout = QHBoxLayout()
+        anomaly_layout.addWidget(self.btn_fix_missing)
+        anomaly_layout.addWidget(self.btn_fix_dupes)
+        main_layout.addLayout(anomaly_layout)
 
     def open_config(self):
         dialog = DbConfigDialog(self)
@@ -199,10 +211,12 @@ class CSVImporterApp(QMainWindow):
             # Получаем новые настройки из UI
             quote_char = self.quote_input.text() or '"'
             escape_char = self.escape_input.text() or None
-            null_val = self.null_input.text()
+            null_input_text = self.null_input.text()
+            null_values_list = (x.strip() for x in null_input_text.split(',')) if null_input_text else ()
 
             header = 0 if self.has_header_cb.isChecked() else None
 
+            print(sep)
             # Читаем с учетом новых параметров
             self.df = pd.read_csv(
                 self.current_file,
@@ -210,9 +224,11 @@ class CSVImporterApp(QMainWindow):
                 header=header,
                 quotechar=quote_char,
                 escapechar=escape_char,
-                na_values=null_val,
+                na_values=null_values_list,
+                keep_default_na=True,
                 encoding='utf-8-sig'
             )
+            print(self.df)
 
             if not self.has_header_cb.isChecked():
                 self.df.columns = [f"col_{i + 1}" for i in range(len(self.df.columns))]
@@ -261,80 +277,90 @@ class CSVImporterApp(QMainWindow):
             combo.setCurrentText(guessed_type)
 
             self.mapping_table.setCellWidget(i, 2, combo)
+
     def process_import(self):
         if not self.engine:
-            QMessageBox.warning(self, "Внимание", "Сначала настройте подключение к БД!")
+            QMessageBox.critical(self, "Ошибка", "Нет подключения к БД")
             return
 
         target_name = self.table_name_input.text().strip()
         if not target_name:
-            QMessageBox.warning(self, "Внимание", "Введите имя таблицы!")
+            QMessageBox.warning(self, "Внимание", "Введите имя таблицы")
             return
+
+        # 1. Подготовка параметров NULL
+        null_input_text = self.null_input.text()
+        null_strings = [x.strip() for x in null_input_text.split(',')] if null_input_text else []
 
         metadata = MetaData()
         temp_name = f"temp_{target_name}"
 
         try:
             with self.engine.begin() as conn:
-                # 1. Описываем и создаем временную таблицу через Core
-                temp_cols = [
-                    Column(self.mapping_table.item(i, 1).text(), Text)
-                    for i in range(self.mapping_table.rowCount())
-                ]
+                # --- ШАГ 1: Создание временной (staging) таблицы ---
+                # В ней все колонки имеют тип Text для первичной загрузки
+                temp_cols = []
+                for i in range(self.mapping_table.rowCount()):
+                    sql_name = self.mapping_table.item(i, 1).text()
+                    temp_cols.append(Column(sql_name, Text))
+
                 temp_table = Table(temp_name, metadata, *temp_cols, extend_existing=True)
                 temp_table.drop(conn, checkfirst=True)
                 temp_table.create(conn)
 
-                # 2. Загружаем DataFrame во временную таблицу
+                # --- ШАГ 2: Загрузка данных из DataFrame в Staging ---
+                # Переименовываем колонки в DF согласно маппингу
                 rename_map = {
                     self.mapping_table.item(i, 0).text(): self.mapping_table.item(i, 1).text()
                     for i in range(self.mapping_table.rowCount())
                 }
-                self.df.rename(columns=rename_map).to_sql(
-                    temp_name, conn, if_exists='append', index=False
-                )
+                upload_df = self.df.rename(columns=rename_map)
+                upload_df.to_sql(temp_name, conn, if_exists='append', index=False)
 
-                # 3. Описываем и создаем основную таблицу
-                final_cols = [Column("id", Integer, primary_key=True, autoincrement=True)]
-
-                # ... внутри цикла формирования колонок в process_import ...
-                for i in range(self.mapping_table.rowCount()):
-                    col_name = self.mapping_table.item(i, 1).text().strip()
-                    type_label = self.mapping_table.cellWidget(i, 2).currentText()
-
-                    # Получаем КЛАСС или ОБЪЕКТ типа из нашего словаря
-                    sql_type_class = SQL_TYPE_REGISTRY[type_label]
-
-                    # Если это Numeric или String, можно добавить параметры инициализации, если нужно
-                    # Для простоты здесь просто используем то, что в словаре
-                    final_cols.append(Column(col_name, sql_type_class))
-
-                target_table = Table(target_name, metadata, *final_cols, extend_existing=True)
-                target_table.create(conn, checkfirst=True)
-
-                null_placeholder = self.null_input.text()  # Берем значение из UI (например, '?')
-
-                select_exprs = []
-                target_cols_names = []
+                # --- ШАГ 3: Формирование структуры финальной таблицы ---
+                final_cols = [Column("id", Integer, primary_key=True)]  # Наш системный PK
+                target_cols_names = []  # Список имен для INSERT
+                select_exprs = []  # Список выражений для SELECT
 
                 for i in range(self.mapping_table.rowCount()):
+                    orig_name = self.mapping_table.item(i, 0).text()
                     sql_name = self.mapping_table.item(i, 1).text()
+
+                    # Пропускаем id из CSV, так как у нас есть свой PK
+                    if sql_name.lower() == 'id':
+                        continue
+
                     type_label = self.mapping_table.cellWidget(i, 2).currentText()
+
                     sql_type = SQL_TYPE_REGISTRY.get(type_label, Text)
 
+                    # Добавляем колонку в схему финальной таблицы
+                    final_cols.append(Column(sql_name, sql_type))
+
+                    # Добавляем в списки для вставки (синхронно!)
                     target_cols_names.append(sql_name)
 
-                    # ИСПОЛЬЗУЕМ null_placeholder из настроек UI
-                    expr = cast(
-                        func.nullif(temp_table.c[sql_name], null_placeholder),
-                        sql_type
+                    # Выражение CAST(NULLIF(col, ?) AS type) с поддержкой нескольких NULL
+                    select_exprs.append(
+                        cast(
+                            case(
+                                (temp_table.c[sql_name].in_(null_strings), None),
+                                else_=temp_table.c[sql_name]
+                            ),
+                            sql_type
+                        ).label(sql_name)
                     )
-                    select_exprs.append(expr)
 
-                # Строим сам запрос
+                # --- ШАГ 4: Создание финальной таблицы и переливка данных ---
+                target_table = Table(target_name, metadata, *final_cols, extend_existing=True)
+                target_table.drop(conn, checkfirst=True)  # Опционально: удалять ли старую таблицу
+                target_table.create(conn)
+
+                # Выполнение вставки через SELECT
+                # Здесь target_cols_names и select_exprs имеют одинаковую длину
                 ins_query = insert(target_table).from_select(
-                    [c.name for c in target_table.c if c.name != 'id'],  # Колонки куда вставляем
-                    select(*select_exprs)  # Откуда берем
+                    target_cols_names,
+                    select(*select_exprs)
                 )
 
                 conn.execute(ins_query)
@@ -342,10 +368,122 @@ class CSVImporterApp(QMainWindow):
                 # Удаляем временную таблицу
                 temp_table.drop(conn)
 
-            QMessageBox.information(self, "Успех", f"Данные импортированы в '{target_name}' через SQLAlchemy Core")
+            QMessageBox.information(self, "Успех", f"Данные успешно импортированы в таблицу '{target_name}'")
 
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка импорта", f"Ошибка: {str(e)}")
+            QMessageBox.critical(self, "Ошибка импорта", f"Критическая ошибка: {str(e)}")
+
+    def show_audit_info(self, result_json):
+        """Парсинг ответа от функций anomaly_detect/fix и вывод отчета"""
+        if not result_json:
+            QMessageBox.warning(self, "Предупреждение", "Функция не вернула данных.")
+            return
+
+        # Извлекаем основные поля из JSONB (который пришел как словарь Python)
+        audit_id = result_json.get('audit_id')
+        kind = result_json.get('kind', 'unknown')
+        mode = result_json.get('mode', 'process')
+        dry_run = result_json.get('dry_run', False)
+
+        # Определяем количество затронутых строк/групп в зависимости от типа функции
+        count = result_json.get('groups_processed') or result_json.get('rows_affected') or 0
+
+        status_str = "🧪 СУХОЙ ПРОГОН (изменения не внесены)" if dry_run else "🚀 УСПЕШНО ВЫПОЛНЕНО"
+
+        report = [
+            f"<b>Статус:</b> {status_str}",
+            f"<b>Тип операции:</b> {kind} ({mode})",
+            f"<b>ID Аудита:</b> {audit_id}",
+            f"<b>Обработано объектов:</b> {count}",
+            "<br><i>Детальный лог сохранен в таблицах dedup_audit и dedup_audit_rows.</i>"
+        ]
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Отчет по аномалиям")
+        msg_box.setTextFormat(Qt.RichText)  # Чтобы работал <b> и <br>
+        msg_box.setText("<br>".join(report))
+        msg_box.setIcon(QMessageBox.Information if not dry_run else QMessageBox.Question)
+        msg_box.exec()
+
+    def run_missing_fix(self):
+        # 1. Считываем имя таблицы из поля ввода
+        target_table = self.table_name_input.text().strip()
+
+        if not target_table:
+            QMessageBox.warning(self, "Внимание", "Укажите имя таблицы, которую нужно обработать.")
+            return
+
+        # 2. Получаем список колонок из таблицы маппинга (или напрямую из БД)
+        cols = [self.mapping_table.item(i, 1).text() for i in range(self.mapping_table.rowCount())]
+
+        # 3. Открываем диалог настроек
+        dlg = MissingValuesDialog(cols, self)
+        if dlg.exec():
+            data = dlg.result_data
+            print(text(
+                        "SELECT anomaly_fix_missing(:s, :t, :p_cols, :k_cols, NULL, :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,  # Имя из поля ввода
+                        "p_cols": None,
+                        "k_cols": None,
+                        "params": json.dumps({"actions": data["actions"]}),
+                        "dry": data["dry_run"]
+                    })
+            try:
+                with self.engine.begin() as conn:
+                    # Вызываем функцию для указанной таблицы (target_table)
+                    res = conn.execute(text(
+                        "SELECT anomaly_fix_missing(:s, :t, :p_cols, :k_cols, NULL, :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,  # Имя из поля ввода
+                        "p_cols": None,
+                        "k_cols": None,
+                        "params": json.dumps({"actions": data["actions"]}),
+                        "dry": data["dry_run"]
+                    }).scalar()
+                    self.show_audit_info(res)
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка SQL", f"Не удалось обработать таблицу '{target_table}':\n{str(e)}")
+
+    def run_duplicates_fix(self):
+        target_table = self.table_name_input.text().strip()
+
+        if not target_table:
+            QMessageBox.warning(self, "Внимание", "Укажите имя таблицы для поиска дубликатов.")
+            return
+
+        cols = [self.mapping_table.item(i, 1).text() for i in range(self.mapping_table.rowCount())]
+
+        dlg = DuplicatesDialog(cols, self)
+        if dlg.exec():
+            data = dlg.result_data
+            print(text(
+                        "SELECT anomaly_fix_duplicates(:s, :t, :p_cols, NULL, 'delete', :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,  # Имя из поля ввода
+                        "p_cols": data["target_columns"],
+                        "params": json.dumps({"keep": data["keep"]}),
+                        "dry": data["dry_run"]
+                    })
+            try:
+                with self.engine.begin() as conn:
+                    res = conn.execute(text(
+                        "SELECT anomaly_fix_duplicates(:s, :t, :p_cols, NULL, 'delete', :params, :dry)"
+                    ), {
+                        "s": "public",
+                        "t": target_table,  # Имя из поля ввода
+                        "p_cols": data["target_columns"],
+                        "params": json.dumps({"keep": data["keep"]}),
+                        "dry": data["dry_run"]
+                    }).scalar()
+                    self.show_audit_info(res)
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка SQL",
+                                     f"Ошибка при удалении дубликатов в '{target_table}':\n{str(e)}")
+
 
 
 if __name__ == "__main__":
